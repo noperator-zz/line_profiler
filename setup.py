@@ -267,3 +267,9 @@ if __name__ == '__main__':
         'Topic :: Software Development',
     ]
     setup(**setupkw)
+
+    for path in (
+        "C:/Python37",
+        "C:/development/python/cpython",
+    ):
+        os.system(f"cp build/lib.win-amd64-3.7/line_profiler/* {path}/Lib/site-packages/line_profiler")
