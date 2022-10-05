@@ -288,3 +288,11 @@ if __name__ == '__main__':
         'Topic :: Software Development',
     ]
     setup(**setupkw)
+
+    import os
+    for path in (
+            "C:/Python37",
+            "C:/development/python/cpython",
+    ):
+        os.system(f"cp _skbuild/win-amd64-3.7/cmake-install/line_profiler/* {path}/Lib/site-packages/line_profiler")
+
