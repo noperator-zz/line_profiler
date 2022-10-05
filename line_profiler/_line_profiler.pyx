@@ -8,6 +8,9 @@ from libc.stdint cimport int64_t
 from libcpp.unordered_map cimport unordered_map
 import threading
 
+def DBG(m): print(m)
+# def DBG(m): pass
+
 # long long int is at least 64 bytes assuming c99
 ctypedef unsigned long long int uint64
 ctypedef long long int int64
@@ -90,6 +93,7 @@ cdef struct LineTime:
 cdef struct LastTime:
     int f_lineno
     PY_LONG_LONG time
+    int64_t code_hash
 
 cdef inline int64 compute_line_hash(uint64 block_hash, uint64 linenum):
     """
@@ -220,9 +224,12 @@ cdef class LineProfiler:
             self.dupes_map[code.co_code] = [code]
         # TODO: Since each line can be many bytecodes, this is kinda inefficient
         # See if this can be sped up by not needing to iterate over every byte
+        block_hash = hash((code.co_code))
         for offset, byte in enumerate(code.co_code):
-            code_hash = compute_line_hash(hash((code.co_code)), PyCode_Addr2Line(<PyCodeObject*>code, offset))
+            line = PyCode_Addr2Line(<PyCodeObject*>code, offset)
+            code_hash = compute_line_hash(block_hash, line)
             if not self._c_code_map.count(code_hash):
+                print(f"add {line} {block_hash} {code_hash}")
                 try:
                     self.code_hash_map[code].append(code_hash)
                 except KeyError:
@@ -323,9 +330,13 @@ cdef class LineProfiler:
         
         stats = {}
         for code in self.code_hash_map:
+            DBG(f" code: {code}")
             cmap = self._c_code_map
             entries = []
             for entry in self.code_hash_map[code]:
+                DBG(f"  entry: {entry}")
+                for i in cmap[entry].values():
+                    DBG(f"   i: {i}")
                 entries += list(cmap[entry].values())
             key = label(code)
             stats[key] = [(e["lineno"], e["nhits"], e["total_time"]) for e in entries]
@@ -337,6 +348,7 @@ cdef class LineProfiler:
 cdef int python_trace_callback(object self_, PyFrameObject *py_frame, int what,
 PyObject *arg):
     """ The PyEval_SetTrace() callback.
+    
     """
     cdef LineProfiler self
     cdef object code
@@ -356,19 +368,25 @@ PyObject *arg):
         if self._c_code_map.count(code_hash):
             time = hpTimer()
             ident = threading.get_ident()
+            DBG(f"{py_frame.f_lineno} {code_hash} {block_hash}")
             if self._c_last_time[ident].count(block_hash):
+                DBG(" exists")
                 old = self._c_last_time[ident][block_hash]
-                line_entries = self._c_code_map[code_hash]
+                old_hash = old.code_hash
+                line_entries = self._c_code_map[old_hash]
                 key = old.f_lineno
                 if not line_entries.count(key):
-                    self._c_code_map[code_hash][key] = LineTime(code_hash, key, 0, 0)
-                self._c_code_map[code_hash][key].nhits += 1
-                self._c_code_map[code_hash][key].total_time += time - old.time
+                    DBG(f"  add {block_hash} {old_hash} {key} {py_frame.f_lineno}")
+                    self._c_code_map[old_hash][key] = LineTime(code_hash, key, 0, 0)
+                self._c_code_map[old_hash][key].nhits += 1
+                self._c_code_map[old_hash][key].total_time += time - old.time
             if what == PyTrace_LINE:
+                DBG(" line")
                 # Get the time again. This way, we don't record much time wasted
                 # in this function.
-                self._c_last_time[ident][block_hash] = LastTime(py_frame.f_lineno, hpTimer())
+                self._c_last_time[ident][block_hash] = LastTime(py_frame.f_lineno, hpTimer(), code_hash)
             elif self._c_last_time[ident].count(block_hash):
+                DBG(" return")
                 # We are returning from a function, not executing a line. Delete
                 # the last_time record. It may have already been deleted if we
                 # are profiling a generator that is being pumped past its end.
